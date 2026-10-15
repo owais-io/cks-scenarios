@@ -6,6 +6,7 @@
 PASS=0; FAIL=0
 green() { printf '\033[32m%s\033[0m\n' "$1"; }
 red()   { printf '\033[31m%s\033[0m\n' "$1"; }
+yellow(){ printf '\033[33m%s\033[0m\n' "$1"; }
 ok()  { green "  [PASS] $1"; PASS=$((PASS+1)); }
 bad() { red   "  [FAIL] $1"; FAIL=$((FAIL+1)); }
 
@@ -105,6 +106,140 @@ if kubectl get clusterrolebinding platform-admins >/dev/null 2>&1; then
   ok "ClusterRoleBinding platform-admins still exists (edited, not deleted)"
 else
   bad "ClusterRoleBinding platform-admins was deleted — you should only have removed reporter from its subjects"
+fi
+
+# --- Diagnostics (not scored) -------------------------------------------------
+# The API server never validates RBAC names: typos like 'cm', 'pods/logs' or a
+# wrong apiGroup are stored and silently match nothing. Lint the scenario's
+# roles and bindings against API discovery to explain WHY a check failed.
+HINTS=()
+hint() { HINTS+=("$1"); }
+
+declare -A DISC        # "g:<apiGroup>" -> discovery JSON (empty = group doesn't exist).
+                       # Keys are prefixed because bash forbids an empty key and core is "".
+load_group() {         # $1 = apiGroup ("" = core)
+  local g=$1 gv
+  [ -n "${DISC[g:$g]+x}" ] && return
+  if [ -z "$g" ]; then
+    DISC[g:$g]=$(kubectl get --raw /api/v1 2>/dev/null)
+  else
+    gv=$(kubectl get --raw "/apis/$g" 2>/dev/null | jq -r '.preferredVersion.groupVersion // empty' 2>/dev/null)
+    if [ -n "$gv" ]; then DISC[g:$g]=$(kubectl get --raw "/apis/$gv" 2>/dev/null); else DISC[g:$g]=""; fi
+  fi
+}
+
+VALID_VERBS=" get list watch create update patch delete deletecollection use bind escalate impersonate approve sign "
+
+lint_resource() {      # $1 = label  $2 = apiGroup  $3 = resource
+  local label=$1 g=$2 r=$3 names base sub long subs lc c other gq
+  [[ $r == *'*'* ]] && return
+  names=$(jq -r '.resources[].name' <<<"${DISC[g:$g]}")
+  grep -qxF -- "$r" <<<"$names" && return
+  gq="\"$g\""; [ -z "$g" ] && gq='"" (core)'
+  base=${r%%/*}; sub=""; [[ $r == */* ]] && sub=${r#*/}
+
+  # kubectl short name (cm, po, deploy...)
+  long=$(jq -r --arg r "$base" '.resources[] | select((.shortNames // []) | index($r)) | .name' <<<"${DISC[g:$g]}" | head -1)
+  if [ -n "$long" ]; then
+    hint "$label: '$base' is a kubectl short name. RBAC needs the full name '$long${sub:+/$sub}'."; return
+  fi
+  # bad subresource on a valid resource (pods/logs)
+  if [ -n "$sub" ] && grep -qxF -- "$base" <<<"$names"; then
+    if grep -qxF -- "$base/${sub%s}" <<<"$names"; then
+      hint "$label: '$r' doesn't exist. Did you mean '$base/${sub%s}'?"
+    else
+      subs=$(grep -- "^$base/" <<<"$names" | paste -sd' ' -)
+      hint "$label: '$r' isn't a subresource of $base. Valid: ${subs:-none}"
+    fi
+    return
+  fi
+  # wrong case / singular (Pod, configmap)
+  lc=$(tr '[:upper:]' '[:lower:]' <<<"$base")
+  for c in "$lc" "${lc}s" "${lc}es"; do
+    if [ "$c" != "$base" ] && grep -qxF -- "$c" <<<"$names"; then
+      hint "$label: '$base' should be '$c${sub:+/$sub}' (resource names are lowercase plural)."; return
+    fi
+  done
+  # right name, wrong apiGroup (deployments in "")
+  if [ -z "$g" ]; then
+    other=$(grep -m1 -- "^$base\." <<<"$ALL_RES" | cut -d. -f2-)
+  elif grep -qxF -- "$base" <<<"$ALL_RES"; then
+    other='"" (core)'
+  else
+    other=$(grep -m1 -- "^$base\." <<<"$ALL_RES" | cut -d. -f2-)
+  fi
+  if [ -n "$other" ]; then
+    hint "$label: '$base' isn't in apiGroup $gq. It's in apiGroup '$other'."; return
+  fi
+  hint "$label: resource '$r' doesn't exist in apiGroup $gq (check the NAME column of 'kubectl api-resources')."
+}
+
+lint_role() {          # $1 = Role|ClusterRole  $2 = namespace ("" for cluster)  $3 = name
+  local kind=$1 ns=$2 name=$3 J n i v g r label nsarg=()
+  [ -n "$ns" ] && nsarg=(-n "$ns")
+  J=$(kubectl get "$kind" "$name" "${nsarg[@]}" -o json 2>/dev/null) || return
+  label="$kind $name"
+  n=$(jq '.rules | length' <<<"$J")
+  for ((i=0; i<n; i++)); do
+    local -a groups resources verbs
+    mapfile -t groups    < <(jq -r ".rules[$i].apiGroups[]?" <<<"$J")
+    mapfile -t resources < <(jq -r ".rules[$i].resources[]?" <<<"$J")
+    mapfile -t verbs     < <(jq -r ".rules[$i].verbs[]?"     <<<"$J")
+    for v in "${verbs[@]}"; do
+      [ "$v" = '*' ] && continue
+      [[ $VALID_VERBS == *" $v "* ]] || hint "$label: '$v' isn't a Kubernetes verb (use get, list, watch, create, update, patch, delete...)."
+    done
+    for g in "${groups[@]}"; do
+      [ "$g" = '*' ] && continue
+      load_group "$g"
+      if [ -z "${DISC[g:$g]}" ]; then hint "$label: apiGroup '$g' doesn't exist on this cluster."; continue; fi
+      for r in "${resources[@]}"; do lint_resource "$label" "$g" "$r"; done
+    done
+  done
+}
+
+lint_binding() {       # $1 = RoleBinding|ClusterRoleBinding  $2 = ns  $3 = name  $4 = SA ns  $5 = SA name
+  local kind=$1 ns=$2 name=$3 sans=$4 sa=$5 J label rk rn wrongns nsarg=()
+  [ -n "$ns" ] && nsarg=(-n "$ns")
+  J=$(kubectl get "$kind" "$name" "${nsarg[@]}" -o json 2>/dev/null) || return
+  label="$kind $name${ns:+ ($ns)}"
+
+  # roleRef to a role that doesn't exist is also accepted silently
+  rk=$(jq -r '.roleRef.kind' <<<"$J"); rn=$(jq -r '.roleRef.name' <<<"$J")
+  if [ "$rk" = Role ]; then
+    kubectl -n "$ns" get role "$rn" >/dev/null 2>&1 || hint "$label: roleRef points to Role '$rn', which doesn't exist in '$ns'."
+  else
+    kubectl get clusterrole "$rn" >/dev/null 2>&1 || hint "$label: roleRef points to ClusterRole '$rn', which doesn't exist."
+  fi
+
+  jq -e --arg n "$sa" --arg ns "$sans" \
+    '.subjects[]? | select(.kind=="ServiceAccount" and .name==$n and .namespace==$ns)' <<<"$J" >/dev/null && return
+  if jq -e --arg n "$sa" '.subjects[]? | select(.kind=="User" and .name==$n)' <<<"$J" >/dev/null; then
+    hint "$label: subject is User '$sa', not the ServiceAccount $sans/$sa. Use --serviceaccount=$sans:$sa (kind: ServiceAccount + namespace: $sans)."
+  elif wrongns=$(jq -er --arg n "$sa" '.subjects[]? | select(.kind=="ServiceAccount" and .name==$n) | (.namespace // "<none>")' <<<"$J" | head -1) && [ -n "$wrongns" ]; then
+    hint "$label: ServiceAccount subject '$sa' has namespace '$wrongns'; it must be '$sans'."
+  else
+    hint "$label: no subject for ServiceAccount $sans/$sa."
+  fi
+}
+
+if command -v jq >/dev/null 2>&1; then
+  ALL_RES=$(kubectl api-resources -o name 2>/dev/null)
+  lint_role    Role        finance reporter-role
+  lint_role    ClusterRole ""      deployment-reader
+  lint_role    ClusterRole ""      node-reader
+  lint_binding RoleBinding        finance reporter-binding    finance reporter
+  lint_binding RoleBinding        finance auditor-deployments audit   auditor
+  lint_binding RoleBinding        payroll auditor-deployments audit   auditor
+  lint_binding ClusterRoleBinding ""      auditor-nodes       audit   auditor
+  if [ "${#HINTS[@]}" -gt 0 ]; then
+    echo
+    yellow "Diagnostics — likely causes (RBAC stores these mistakes without any error):"
+    for h in "${HINTS[@]}"; do yellow "  -> $h"; done
+  fi
+else
+  echo
+  yellow "  [SKIP] RBAC diagnostics need jq."
 fi
 
 echo
