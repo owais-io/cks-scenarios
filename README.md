@@ -48,6 +48,7 @@ That's it. Re-run `setup.sh` any time to reset the scenario cleanly.
 | # | Title | Domain | Folder |
 |---|-------|--------|--------|
 | 01 | NetworkPolicy: Default-Deny + Selective Allow | Cluster Hardening | `scenarios/01-networkpolicy` |
+| 02 | NetworkPolicy (harder): Egress, DNS & Cross-Namespace | Cluster Hardening | `scenarios/02-networkpolicy-harder` |
 
 _More on request: RBAC least-privilege, Pod Security Admission, seccomp/AppArmor,
 Falco runtime detection, Trivy image scanning, apiserver audit logging, etcd
