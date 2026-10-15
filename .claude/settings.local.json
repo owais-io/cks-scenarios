@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bash -n scenarios/01-networkpolicy/cleanup.sh)",
+      "Bash(bash -n scenarios/02-networkpolicy-harder/cleanup.sh)"
+    ]
+  }
+}
