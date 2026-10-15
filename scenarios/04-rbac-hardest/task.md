@@ -47,6 +47,21 @@ of reporter's other access anywhere in the cluster, **without removing anyone el
    - ClusterRole + **RoleBinding** → those rules granted only in that one namespace (reusable role).
    - ClusterRole + **ClusterRoleBinding** → granted in **every** namespace. That's wrong for Deployments here.
    - **Nodes** are cluster-scoped, so only a ClusterRoleBinding can grant them.
+8. **ServiceAccount vs User subject.** `--user=reporter` binds a *User* named `reporter`,
+   which is not the SA. The SA's identity is `system:serviceaccount:finance:reporter`. Use:
+   ```bash
+   kubectl -n finance create rolebinding reporter-binding --role=reporter-role \
+     --serviceaccount=finance:reporter
+   ```
+   In YAML the subject is `kind: ServiceAccount` + `name` + `namespace` (no `apiGroup`).
+9. **Exact resource names, with no validation.** RBAC accepts any string, so a typo
+   silently matches nothing:
+   - The subresource is `pods/log` (singular), **not** `pods/logs`.
+   - Use full plural names (`configmaps`, `deployments`, `pods`), **not** short names
+     (`cm`, `deploy`, `po`). Short names only work on the kubectl command line.
+
+   Check exact names with `kubectl api-resources` (the NAME column). Always confirm a rule
+   with `kubectl auth can-i`.
 
 ## Test yourself
 
