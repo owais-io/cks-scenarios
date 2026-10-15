@@ -6,6 +6,7 @@ Specialist (CKS)** exam. Each scenario is a folder with scripts:
 - `setup.sh`   — builds the environment and prints the task
 - `verify.sh`  — checks your solution and gives pass/fail feedback + a score
 - `solution.sh`— the reference answer (read it, or run it to auto-apply)
+- `cleanup.sh` — deletes the scenario's namespaces (and everything in them)
 - `task.md`    — the task text + hints
 
 ## Workflow: GitHub → Killercoda
@@ -34,6 +35,7 @@ bash ./setup.sh      # creates resources + prints YOUR TASK
 #  ... solve the task in the terminal ...
 bash ./verify.sh     # grades your solution and prints feedback
 bash ./solution.sh   # reveal / auto-apply the reference answer
+bash ./cleanup.sh    # remove the scenario's namespaces when done
 ```
 
 That's it. Re-run `setup.sh` any time to reset the scenario cleanly.

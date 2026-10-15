@@ -39,6 +39,13 @@ kubectl -n external run scanner \
   --labels="app=scanner" \
   --command -- sleep 1d >/dev/null
 
+# site: an unrelated web server. web must NOT be able to egress to it
+# (proves web's egress is limited to api + DNS only).
+kubectl -n external run site \
+  --image=nginx:alpine \
+  --labels="app=site" \
+  --port=80 >/dev/null
+
 echo "Waiting for pods to become Ready (~30-60s)..."
 kubectl -n shop     wait --for=condition=Ready pod --all --timeout=120s >/dev/null
 kubectl -n external wait --for=condition=Ready pod --all --timeout=120s >/dev/null
@@ -71,6 +78,7 @@ Net effect checked by verify.sh:
   - web  -> api:80         ALLOWED
   - web  DNS resolution    WORKS (nslookup api.shop.svc.cluster.local)
   - scanner(external) -> api:80   BLOCKED
+  - web  -> site(external):80     BLOCKED  (web egress = api + DNS only)
   - a default-deny ingress AND a default-deny egress policy exist
 
 Hints: cat ./task.md        Reveal: cat ./solution.sh

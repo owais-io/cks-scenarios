@@ -3,10 +3,10 @@
 set -euo pipefail
 
 cat <<'EOF'
-Applying reference solution (4 policies in 'shop'):
-  1) default-deny-all      empty podSelector, Ingress+Egress, no rules
-  2) allow-web-egress      web -> api:80  AND  web -> kube-system:53 (DNS)
-  3) allow-api-ingress     api <- web on TCP 80
+Applying reference solution (3 policies in 'shop'):
+  1) default-deny-all            empty podSelector, Ingress+Egress, no rules
+  2) allow-web-egress            web -> api:80  AND  web -> kube-system:53 (DNS)
+  3) allow-api-ingress-from-web  api <- web on TCP 80
 Note: policies are additive; the allows stack on top of the default-deny.
 EOF
 

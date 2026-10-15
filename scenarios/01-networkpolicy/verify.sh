@@ -28,6 +28,21 @@ if [ -z "$DB_IP" ]; then
   exit 1
 fi
 
+# Preflight: every pod used below must be Running, otherwise a failed exec
+# would be miscounted as "BLOCKED".
+for p in db api attacker; do
+  PHASE=$(kubectl -n "$NS" get pod "$p" -o jsonpath='{.status.phase}' 2>/dev/null || true)
+  if [ "$PHASE" != "Running" ]; then
+    red "Pod '$p' is not Running (phase: ${PHASE:-missing}). Run ./setup.sh first."
+    exit 1
+  fi
+done
+# Target must actually serve on :80 (localhost is never affected by NetworkPolicy).
+if ! kubectl -n "$NS" exec db -- wget -q -O /dev/null -T 4 http://127.0.0.1:80 >/dev/null 2>&1; then
+  red "nginx in db isn't serving on :80, so the BLOCKED check would be meaningless. Re-run ./setup.sh."
+  exit 1
+fi
+
 # curl helper: returns 0 if HTTP reachable within timeout, non-zero otherwise.
 reach() { # $1 = pod name
   kubectl -n "$NS" exec "$1" -- curl -s -o /dev/null -m 4 "http://$DB_IP:80" >/dev/null 2>&1
@@ -69,10 +84,9 @@ if [ "$DD" = "unknown" ]; then
 elif [ "$DD" = "yes" ]; then
   ok "default-deny ingress policy found (empty podSelector, no ingress rules)"
 else
-  yellow "  [WARN] No obvious default-deny policy found."
-  yellow "         Connectivity may still pass if your allow-policy is narrow,"
-  yellow "         but best practice (and the task) wants an explicit default-deny."
-  FAIL=$((FAIL+1))
+  bad "no default-deny ingress policy (empty podSelector, Ingress, no rules)"
+  yellow "         Connectivity can pass without it (your allow-policy already isolates db),"
+  yellow "         but every OTHER pod in 'prod' stays wide open. The task requires it."
 fi
 
 # --- Result ------------------------------------------------------------------

@@ -11,7 +11,8 @@ Namespaces: `shop`, `external`. Create NetworkPolicies in **`shop`** so that:
 3. `web` may egress to `api` pods on **TCP 80** only (plus DNS from step 2).
 4. `api` may accept ingress **only from `web`** in `shop`, on **TCP 80**.
 
-Result: `web→api:80` works, DNS works, `scanner` (in `external`) is blocked from `api`.
+Result: `web→api:80` works, DNS works, `scanner` (in `external`) is blocked from `api`,
+and `web` can't reach anything else (e.g. `external/site:80` is blocked).
 
 ## Why this one is harder
 

@@ -44,6 +44,11 @@ selectors. Requirement **2(b) is a separate item** (OR). If you instead write
 
 The two "BLOCKED" rows exist specifically to catch that mistake.
 
+> Note: under your default-deny egress, `secure/worker` can't send anything
+> anyway, which would hide a leaky ingress policy. So `verify.sh` briefly adds
+> a temporary allow-all-egress policy for `worker` during that one check (and
+> removes it afterward). This proves `payments` ingress itself rejects it.
+
 ## Also know for the exam (not graded here)
 
 - `ipBlock` with `cidr` + `except` for allowing/denying external CIDR ranges.
